@@ -1,14 +1,3 @@
-/*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
- *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- */
 #include "mm.h"
 
 #include <assert.h>
@@ -41,6 +30,7 @@ team_t team = {
 #define WSIZE 4
 #define DSIZE 8
 #define CHUNKSIZE (1 << 10)
+#define LISTLIMIT 12
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -58,37 +48,45 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))
 
-// #define PREP(bp) (* (void *)(bp))
 #define PREP(bp) (* (char **)(bp))
 #define SUCP(bp) (* (char **)(bp + WSIZE))
 
 static char *heap_listp;
-static char *freelist_head = NULL;
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 
+void printarray();
 void add_block_first(void *bp);
 void delete_block(void *bp);
 
+
+void* seg_list[LISTLIMIT];
+int calc_index(int size);
+
 int mm_init(void)
 {
-  freelist_head = NULL;
   if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
     return -1;
 
+  for (int i = 0; i < LISTLIMIT; i ++){
+      seg_list[i] = NULL;
+  }
   PUT(heap_listp, 0);
   PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));
   PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
   PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
   heap_listp += (2 * WSIZE);
 
+  if (extend_heap(4) == NULL)       
+    return -1;
+
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
     return -1;
-  void *tmp = SUCP(freelist_head);
 
+  // printarray();
   return 0;
 }
 
@@ -111,6 +109,7 @@ static void *extend_heap(size_t words)
 
 static void *coalesce(void *bp)
 {
+
   size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
   size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
   size_t size = GET_SIZE(HDRP(bp));
@@ -165,9 +164,10 @@ void *mm_malloc(size_t size)
   }
 
   extendsize = MAX(asize, CHUNKSIZE);
-  if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
+  if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
     return NULL;
-  delete_block(bp);
+  }
+
   place(bp, asize);
 
   return bp;
@@ -220,7 +220,8 @@ void *mm_realloc(void *bp, size_t size)
 static void place(void *bp, size_t asize)
 {
   size_t csize = GET_SIZE(HDRP(bp));
-  // delete_block(bp);
+
+  delete_block(bp);
 
   if ((csize - asize) >= (2 * DSIZE))
   {
@@ -229,6 +230,7 @@ static void place(void *bp, size_t asize)
     bp = NEXT_BLKP(bp);
     PUT(HDRP(bp), PACK(csize - asize, 0));
     PUT(FTRP(bp), PACK(csize - asize, 0));
+    
     add_block_first(bp);
   }
   else
@@ -241,38 +243,83 @@ static void place(void *bp, size_t asize)
 static void *find_fit(size_t asize)
 {
   void *bp;
-
-  for(bp = freelist_head; bp != NULL; bp = SUCP(bp)){
-    if(GET_SIZE(HDRP(bp)) >= asize){
-        delete_block(bp);
+  int index = calc_index(asize);
+  // int index = 0;
+  bp = seg_list[index];
+  while (index < LISTLIMIT) {
+    bp = seg_list[index];
+    for(bp ; bp != NULL; bp = SUCP(bp)){
+      if(GET_SIZE(HDRP(bp)) >= asize){
         return bp;
-    }
+      }
+    }    
+    index++;
   }
+
   return NULL;
 }
 
 void add_block_first(void *bp)
 {
+  // printf("addblock first %d\n", GET_SIZE(HDRP(bp)));
+  int tmp = GET_SIZE(HDRP(bp));
+  int index = calc_index(tmp);
+  
+  // printf("index: %d\n", index);
+  void* head = seg_list[index];
+
   PREP(bp) = NULL; // 나한테 prev 추가
-  SUCP(bp) = freelist_head;  // 나한테 next 추가
-  if (freelist_head != NULL) {
-    PREP(freelist_head) = bp; // 기존 첫번째 노드의 prev를 수정
+  SUCP(bp) = head;  // 나한테 next 추가
+  if (head != NULL) {
+    PREP(head) = bp; // 기존 첫번째 노드의 prev를 수정
   }
-  freelist_head = bp; // 연결리스트 헤드 변경
+  seg_list[index] = bp; // 연결리스트 헤드 변경
+
 }
 
 void delete_block(void *bp)
 {
-  // 첫 번째 블록을 없앨 때
-  if(bp == freelist_head){
-      if (SUCP(bp)!= NULL) {
-        PREP(SUCP(bp)) = NULL;
-      }
-      freelist_head = SUCP(bp);
+  int index = calc_index(GET_SIZE(HDRP(bp)));
+  void* head = seg_list[index];
+  
+  if(bp == head){
+    if (SUCP(bp)!= NULL) {
+      PREP(SUCP(bp)) = NULL;
+    }
+    seg_list[index] = SUCP(bp);
   }else{
       SUCP(PREP(bp)) = SUCP(bp);
       if (SUCP(bp)!= NULL) {
         PREP(SUCP(bp)) = PREP(bp);
       }
+  }
+}
+
+int calc_index(int size){
+    int i = -4;
+    while (size > 0){
+        size = (size >> 1);
+        i++;
+        if (i >= LISTLIMIT-1)
+         break;
+    }
+    if (i < 0) 
+      return 0;
+    return i;
+}
+
+
+
+void printarray() {
+  int idx = 0;
+  while (idx < LISTLIMIT) {
+    void* now = seg_list[idx]; 
+    int count = 0;
+    while (now != NULL) {
+      count++;
+      now = SUCP(now);
+    }
+    printf("%d 리스트 개수 : %d\n", idx, count);
+    idx++;
   }
 }

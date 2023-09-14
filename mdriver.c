@@ -590,8 +590,8 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges)
 
     /* Call the mm package's init function */
     if (mm_init() < 0) {
-	malloc_error(tracenum, 0, "mm_init failed.");
-	return 0;
+		malloc_error(tracenum, 0, "mm_init failed.");
+		return 0;
     }
 
     /* Interpret each operation in the trace in order */
